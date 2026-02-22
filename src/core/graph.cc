@@ -1,4 +1,6 @@
 #include "core/graph.h"
+#include "operators/matmul.h"
+#include "operators/transpose.h"
 #include <algorithm>
 #include <cstdint>
 #include <numeric>
@@ -107,6 +109,207 @@ namespace infini
         // 1. 去除冗余的算子（例如，两个相邻的算子都是 transpose 算子，且做的是相反的操作，可以将其全部删除）
         // 2. 合并算子（例如，矩阵乘算子中含有属性transA、transB，如果其输入存在transpose，且对最后两个维度做交换，就可以将transpose融入到矩阵乘算子的属性中去）
         // =================================== 作业 ===================================
+        auto isInversePermute = [](const std::vector<int> &p1,
+                                   const std::vector<int> &p2)
+        {
+            if (p1.size() != p2.size())
+            {
+                return false;
+            }
+            const int rank = static_cast<int>(p1.size());
+            for (int i = 0; i < rank; ++i)
+            {
+                if (p2[p1[i]] != i)
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        auto isLastTwoSwap = [](const std::vector<int> &perm, int rank)
+        {
+            if (static_cast<int>(perm.size()) != rank || rank < 2)
+            {
+                return false;
+            }
+            for (int i = 0; i < rank - 2; ++i)
+            {
+                if (perm[i] != i)
+                {
+                    return false;
+                }
+            }
+            return perm[rank - 2] == rank - 1 && perm[rank - 1] == rank - 2;
+        };
+
+        auto eraseOp = [&](const Operator &victim)
+        {
+            ops.erase(std::remove(ops.begin(), ops.end(), victim), ops.end());
+        };
+
+        auto eraseTensor = [&](const Tensor &victim)
+        {
+            tensors.erase(std::remove(tensors.begin(), tensors.end(), victim),
+                          tensors.end());
+        };
+
+        auto rebuildConnections = [&]()
+        {
+            for (auto &tensor : tensors)
+            {
+                tensor->targets.clear();
+                tensor->source.reset();
+            }
+            for (auto &op : ops)
+            {
+                op->predecessors.clear();
+                op->successors.clear();
+            }
+            for (auto &op : ops)
+            {
+                for (auto &output : op->outputs)
+                {
+                    output->source = op;
+                }
+            }
+            for (auto &op : ops)
+            {
+                for (auto &input : op->inputs)
+                {
+                    input->targets.emplace_back(op);
+                    if (auto pred = input->source.lock())
+                    {
+                        pred->successors.emplace_back(op);
+                        op->predecessors.emplace_back(pred);
+                    }
+                }
+            }
+        };
+
+        rebuildConnections();
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+
+            // Rule 1: eliminate inverse transpose pairs
+            for (const auto &op : ops)
+            {
+                if (op->getOpType() != OpType::Transpose)
+                {
+                    continue;
+                }
+                const auto trans2Op = op;
+                auto trans2 = as<TransposeObj>(trans2Op);
+                auto trans2Input = trans2->getInputs(0);
+                auto trans1Op = trans2Input->getSource();
+                if (!trans1Op || trans1Op->getOpType() != OpType::Transpose)
+                {
+                    continue;
+                }
+                auto trans1 = as<TransposeObj>(trans1Op);
+                auto trans1Out = trans1->getOutput();
+                if (trans1Out->getTargets().size() != 1 ||
+                    trans1Out->getTargets()[0] != op)
+                {
+                    continue;
+                }
+                if (!isInversePermute(trans1->getPermute(), trans2->getPermute()))
+                {
+                    continue;
+                }
+
+                auto trans1Input = trans1->getInputs(0);
+                auto trans2Out = trans2->getOutput();
+                auto successors = trans2Out->getTargets();
+                for (const auto &succ : successors)
+                {
+                    succ->replaceInput(trans2Out, trans1Input);
+                }
+
+                eraseOp(trans1Op);
+                eraseOp(trans2Op);
+                eraseTensor(trans1Out);
+                eraseTensor(trans2Out);
+                changed = true;
+                break;
+            }
+            if (changed)
+            {
+                rebuildConnections();
+                continue;
+            }
+
+            // Rule 2: fuse transpose into matmul transA/transB
+            for (const auto &op : ops)
+            {
+                if (op->getOpType() != OpType::MatMul)
+                {
+                    continue;
+                }
+                auto matmul = as<MatmulObj>(op);
+                for (int inputId = 0; inputId < 2; ++inputId)
+                {
+                    auto input = matmul->getInputs(inputId);
+                    auto transOp = input->getSource();
+                    if (!transOp || transOp->getOpType() != OpType::Transpose)
+                    {
+                        continue;
+                    }
+                    if (input->getTargets().size() != 1 || input->getTargets()[0] != op)
+                    {
+                        continue;
+                    }
+                    auto trans = as<TransposeObj>(transOp);
+                    if (!isLastTwoSwap(trans->getPermute(),
+                                       static_cast<int>(input->getRank())))
+                    {
+                        continue;
+                    }
+
+                    matmul->replaceInput(input, trans->getInputs(0));
+                    if (inputId == 0)
+                    {
+                        matmul->setTransA(!matmul->getTransA());
+                    }
+                    else
+                    {
+                        matmul->setTransB(!matmul->getTransB());
+                    }
+
+                    eraseOp(transOp);
+                    eraseTensor(input);
+                    changed = true;
+                    break;
+                }
+                if (changed)
+                {
+                    break;
+                }
+            }
+            if (changed)
+            {
+                rebuildConnections();
+            }
+        }
+
+        rebuildConnections();
+        for (auto it = tensors.begin(); it != tensors.end();)
+        {
+            auto tensor = *it;
+            if (tensor->targets.empty() && tensor->source.expired())
+            {
+                it = tensors.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+        rebuildConnections();
+        sorted = false;
+        (void)topo_sort();
     }
 
     Tensor GraphObj::getTensor(int fuid) const
