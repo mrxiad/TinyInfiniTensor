@@ -1,5 +1,6 @@
 #include "core/graph.h"
 #include <algorithm>
+#include <cstdint>
 #include <numeric>
 #include <queue>
 
@@ -152,6 +153,66 @@ namespace infini
         // TODO：利用 allocator 给计算图分配内存
         // HINT: 获取分配好的内存指针后，可以调用 tensor 的 setDataBlob 函数给 tensor 绑定内存
         // =================================== 作业 ===================================
+        std::unordered_map<TensorObj *, size_t> offsets;
+        std::unordered_map<TensorObj *, size_t> bytes;
+        std::unordered_map<TensorObj *, int> remainUses;
+        std::unordered_set<TensorObj *> graphOutputs;
+
+        for (const auto &tensor : tensors)
+        {
+            remainUses.emplace(tensor.get(),
+                               static_cast<int>(tensor->getTargets().size()));
+        }
+        for (const auto &tensor : getOutputs())
+        {
+            graphOutputs.emplace(tensor.get());
+        }
+
+        auto ensureAllocated = [&](const Tensor &tensor)
+        {
+            auto *key = tensor.get();
+            if (offsets.find(key) != offsets.end())
+            {
+                return;
+            }
+            auto nbytes = tensor->getBytes();
+            auto offset = allocator.alloc(nbytes);
+            offsets.emplace(key, offset);
+            bytes.emplace(key, nbytes);
+        };
+
+        for (const auto &op : ops)
+        {
+            for (const auto &input : op->getInputs())
+            {
+                ensureAllocated(input);
+            }
+            for (const auto &output : op->getOutputs())
+            {
+                ensureAllocated(output);
+            }
+
+            for (const auto &input : op->getInputs())
+            {
+                auto *key = input.get();
+                auto it = remainUses.find(key);
+                IT_ASSERT(it != remainUses.end());
+                IT_ASSERT(it->second > 0);
+                --(it->second);
+                if (it->second == 0 && graphOutputs.find(key) == graphOutputs.end())
+                {
+                    allocator.free(offsets.at(key), bytes.at(key));
+                }
+            }
+        }
+
+        auto *basePtr = reinterpret_cast<uint8_t *>(allocator.getPtr());
+        for (const auto &tensor : tensors)
+        {
+            ensureAllocated(tensor);
+            auto addr = offsets.at(tensor.get());
+            tensor->setDataBlob(make_ref<BlobObj>(runtime, basePtr + addr));
+        }
 
         allocator.info();
     }
