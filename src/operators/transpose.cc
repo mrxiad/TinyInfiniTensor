@@ -6,12 +6,14 @@ namespace infini
                                vector<int> permute)
         : OperatorObj(OpType::Transpose, {input}, {output})
     {
-        auto rank = input->getRank();
+        const auto rank = input->getRank();
         if (permute.empty())
         {
+            transposePermute.resize(rank);
             for (size_t i = 0; i < rank; ++i)
             {
-                transposePermute[i] = i;
+                // ONNX default permutation reverses all dimensions.
+                transposePermute[i] = static_cast<int>(rank - 1 - i);
             }
         }
         else
@@ -27,14 +29,23 @@ namespace infini
         const auto A = inputs[0];
         auto input_dim = A->getDims();
         auto output_dim = input_dim;
-        int rank = A->getRank();
+        const int rank = static_cast<int>(A->getRank());
 
         // =================================== 作业 ===================================
         // TODO：修改 output_dim，返回正确的 transpose 后的 shape
         // REF: https://onnx.ai/onnx/operators/onnx__Transpose.html#transpose-21
         // =================================== 作业 ===================================
-
-        return std::nullopt;
+        IT_ASSERT(static_cast<int>(transposePermute.size()) == rank);
+        std::vector<bool> visited(rank, false);
+        for (int i = 0; i < rank; ++i)
+        {
+            int axis = transposePermute[i];
+            IT_ASSERT(axis >= 0 && axis < rank);
+            IT_ASSERT(!visited[axis]);
+            visited[axis] = true;
+            output_dim[i] = input_dim[axis];
+        }
+        return {{output_dim}};
     }
 
     std::string TransposeObj::toString() const
