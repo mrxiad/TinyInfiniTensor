@@ -5,3 +5,25 @@
 [环境部署文档](docs/项目部署.md)
 
 [训练营作业介绍文档](docs/训练营作业介绍.md)
+
+## 构建说明（默认 clang-14）
+
+项目的 `Makefile` 已默认使用 `clang-14/clang++-14` 构建，直接执行：
+
+```bash
+make build
+```
+
+默认构建目录为 `build/clang14-Release`，后续可直接复用，不需要重新配置编译器。
+
+执行测试：
+
+```bash
+make test-cpp
+```
+
+如需切换编译器，可覆盖变量：
+
+```bash
+make build C_COMPILER=gcc-10 CXX_COMPILER=g++-10
+```
