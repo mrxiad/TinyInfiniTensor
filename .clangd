@@ -1,0 +1,7 @@
+CompileFlags:
+  CompilationDatabase: .
+  Compiler: clang++-14
+  Add:
+    - -isystem/usr/include/c++/9
+    - -isystem/usr/include/x86_64-linux-gnu/c++/9
+    - -isystem/usr/include/c++/9/backward

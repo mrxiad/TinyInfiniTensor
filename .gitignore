@@ -33,6 +33,7 @@
 
 build/
 build_debug/
+compile_commands.json
 
 .vscode/
 
@@ -44,3 +45,4 @@ build_debug/
 *.onnx
 *.pb
 *.npy
+.cache/*

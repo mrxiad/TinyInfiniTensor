@@ -4,7 +4,36 @@ option(BUILD_TEST "Build tests" OFF)
 cmake_minimum_required(VERSION 3.17)
 
 include(CMakeDependentOption)
+
+option(TINYINF_CLANG_STDLIB_AUTOFIX "Auto-fix libstdc++ paths for toolchains on Linux." ON)
+
+if(TINYINF_CLANG_STDLIB_AUTOFIX AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+  set(_tinyinf_gcc_arch "x86_64-linux-gnu")
+  file(GLOB _tinyinf_libstdcpp_candidates "/usr/lib/gcc/${_tinyinf_gcc_arch}/*/libstdc++.so")
+  set(_tinyinf_gcc_libdir "")
+  set(_tinyinf_gcc_ver "")
+  foreach(_tinyinf_libstdcpp ${_tinyinf_libstdcpp_candidates})
+    get_filename_component(_tinyinf_candidate_dir "${_tinyinf_libstdcpp}" DIRECTORY)
+    get_filename_component(_tinyinf_candidate_ver "${_tinyinf_candidate_dir}" NAME)
+    if(EXISTS "/usr/include/c++/${_tinyinf_candidate_ver}" AND
+       EXISTS "/usr/include/${_tinyinf_gcc_arch}/c++/${_tinyinf_candidate_ver}")
+      set(_tinyinf_gcc_libdir "${_tinyinf_candidate_dir}")
+      set(_tinyinf_gcc_ver "${_tinyinf_candidate_ver}")
+    endif()
+  endforeach()
+
+  if(_tinyinf_gcc_libdir)
+    set(_tinyinf_cxx_include "/usr/include/c++/${_tinyinf_gcc_ver}")
+    set(_tinyinf_cxx_arch_include "/usr/include/${_tinyinf_gcc_arch}/c++/${_tinyinf_gcc_ver}")
+    set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} -isystem ${_tinyinf_cxx_include} -isystem ${_tinyinf_cxx_arch_include} -isystem ${_tinyinf_cxx_include}/backward")
+    set(CMAKE_EXE_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT} -L${_tinyinf_gcc_libdir}")
+    set(CMAKE_SHARED_LINKER_FLAGS_INIT "${CMAKE_SHARED_LINKER_FLAGS_INIT} -L${_tinyinf_gcc_libdir}")
+    set(CMAKE_MODULE_LINKER_FLAGS_INIT "${CMAKE_MODULE_LINKER_FLAGS_INIT} -L${_tinyinf_gcc_libdir}")
+  endif()
+endif()
+
 project(InfiniTensor C CXX)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 cmake_dependent_option(BUILD_TEST_CORE "Build tests for core components" ON BUILD_TEST OFF)
 
